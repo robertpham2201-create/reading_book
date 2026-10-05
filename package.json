@@ -1,0 +1,14 @@
+{
+  "name": "reading_book",
+  "version": "1.0.0",
+  "description": "Kindle English Reading Web App",
+  "type": "module",
+  "scripts": {
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev": "node run-dev.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
