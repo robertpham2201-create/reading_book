@@ -2,12 +2,13 @@ import { Router, Request, Response } from 'express';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getProjectRoot } from '../../../db/index.js';
 
 const router = Router();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const dictDbPath = path.resolve(__dirname, '../../../db/dict.db');
+const dictDbPath = path.join(getProjectRoot(), 'db', 'dict.db');
 
 let dictDb: DatabaseSync | null = null;
 try {
