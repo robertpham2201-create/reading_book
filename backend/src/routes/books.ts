@@ -41,6 +41,63 @@ const upload = multer({
   },
 });
 
+// Hàm tái tạo chuẩn các đoạn văn từ file PDF, loại bỏ gãy dòng và running headers
+function reconstructPdfText(rawText: string): string {
+  const rawLines = rawText.replace(/\r\n/g, '\n').split('\n');
+  const paragraphs: string[] = [];
+  let currentPara = '';
+
+  for (let i = 0; i < rawLines.length; i++) {
+    let line = rawLines[i].trim();
+    if (!line) {
+      if (currentPara) {
+        paragraphs.push(currentPara);
+        currentPara = '';
+      }
+      continue;
+    }
+
+    // Bỏ qua rác phân trang và watermark
+    if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line)) continue;
+    if (/^-\s*\d+\s*-$/.test(line)) continue;
+    if (/^\[\d+\]$/.test(line)) continue;
+
+    // Bỏ số trang nội dòng dạng [9], [10]...
+    line = line.replace(/\[\d+\]\s*/g, '');
+
+    if (!currentPara) {
+      currentPara = line;
+      if (line.length <= 45 && !/[.!?]$/.test(line)) {
+        paragraphs.push(currentPara);
+        currentPara = '';
+      }
+      continue;
+    }
+
+    if (currentPara.length <= 45 && !/[.!?]$/.test(currentPara)) {
+      paragraphs.push(currentPara);
+      currentPara = line;
+      continue;
+    }
+
+    const isNewDialogue = /^[“\"'‘—\-]/.test(line);
+    const prevEndsSentence = /[.!?][”\"'’]?$/.test(currentPara);
+    const isHyphenated = /-\s*$/.test(currentPara);
+
+    if (isHyphenated) {
+      currentPara = currentPara.replace(/-\s*$/, '') + line;
+    } else if (isNewDialogue || prevEndsSentence) {
+      paragraphs.push(currentPara);
+      currentPara = line;
+    } else {
+      currentPara += ' ' + line;
+    }
+  }
+
+  if (currentPara) paragraphs.push(currentPara);
+  return paragraphs.join('\n\n');
+}
+
 // Lấy danh sách sách của user
 router.get('/', (req: Request, res: Response) => {
   const userId = req.query.userId;
@@ -125,13 +182,7 @@ router.post('/upload', upload.single('bookFile'), async (req: Request, res: Resp
           });
         }
 
-        textContent = extractedText
-          .replace(/\r\n/g, '\n')
-          .replace(/\n*--\s*\d+\s+of\s+\d+\s*--\n*/gi, '\n\n')
-          .replace(/\n\s*-\s*\d+\s*-\s*\n/g, '\n\n')
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
-
+        textContent = reconstructPdfText(extractedText);
         format = 'txt';
 
         // Lấy title/author từ PDF metadata nếu có

@@ -165,66 +165,108 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
     }
   }, [settings.fontSize]);
 
-  // Phân chia file TXT thành các trang đọc đều đặn, thông minh, không trang rác
+  // Phân chia file TXT/PDF thành các trang đọc trọn vẹn, không cắt nửa chừng đoạn văn
   const paginateText = (text: string) => {
-    // 1. Loại bỏ các rác PDF như '-- 4 of 52 --', '- 4 -', dòng số trang đơn độc
-    const cleaned = text
-      .replace(/\r\n/g, '\n')
-      .replace(/\n*--\s*\d+\s+of\s+\d+\s*--\n*/gi, '\n\n')
-      .replace(/\n\s*-\s*\d+\s*-\s*\n/g, '\n\n')
-      .replace(/\n{3,}/g, '\n\n');
-
-    const rawParagraphs = cleaned.split(/\n\s*\n/);
-    const paragraphs: string[] = [];
-
-    for (const p of rawParagraphs) {
-      const trimmed = p.trim();
-      if (!trimmed) continue;
-      // Bỏ qua nếu là số trang đơn độc hoặc rác phân trang pdf
-      if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(trimmed)) continue;
-      if (/^-\s*\d+\s*-$/.test(trimmed)) continue;
-      if (/^\d{1,4}$/.test(trimmed)) continue;
-      paragraphs.push(trimmed);
+    if (!text || !text.trim()) {
+      setTxtChapters([[]]);
+      setTotalPages(1);
+      return;
     }
 
-    const pages: string[] = [];
-    const targetChars = Math.round(750 * (18 / Math.max(12, settings.fontSize || 18)));
-    const minChars = Math.round(targetChars * 0.55);
+    // 1. Nhận diện các đoạn văn (Paragraphs)
+    let paragraphs: string[] = [];
 
+    // Kiểm tra xem văn bản đã có sẵn cấu trúc đoạn văn (\n\n) rõ ràng hay chưa
+    const rawParagraphs = text.replace(/\r\n/g, '\n').split(/\n\s*\n/);
+    const hasExistingParagraphs = rawParagraphs.length > 5 && rawParagraphs.some((p) => p.trim().length > 80);
+
+    if (hasExistingParagraphs) {
+      for (const p of rawParagraphs) {
+        const trimmed = p.trim();
+        if (!trimmed) continue;
+        if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(trimmed)) continue;
+        if (/^-\s*\d+\s*-$/.test(trimmed)) continue;
+        paragraphs.push(trimmed);
+      }
+    } else {
+      // Trường hợp bóc tách từ PDF (các dòng thường bị ngắt đơn lẻ \n theo khổ trang in)
+      const rawLines = text.replace(/\r\n/g, '\n').split('\n');
+      let currentPara = '';
+
+      for (let i = 0; i < rawLines.length; i++) {
+        let line = rawLines[i].trim();
+        if (!line) {
+          if (currentPara) {
+            paragraphs.push(currentPara);
+            currentPara = '';
+          }
+          continue;
+        }
+
+        // Bỏ qua rác phân trang và running headers lặp lại
+        if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line)) continue;
+        if (/^-\s*\d+\s*-$/.test(line)) continue;
+        if (/^\[\d+\]$/.test(line)) continue;
+        if (/Asiaing\.com/i.test(line)) continue;
+
+        // Bỏ số trang nội dòng dạng [9], [10]...
+        line = line.replace(/\[\d+\]\s*/g, '');
+
+        if (!currentPara) {
+          currentPara = line;
+          // Tiêu đề hoặc dòng ngắn không kết thúc bằng dấu chấm: giữ làm 1 đoạn riêng
+          if (line.length <= 45 && !/[.!?]$/.test(line)) {
+            paragraphs.push(currentPara);
+            currentPara = '';
+          }
+          continue;
+        }
+
+        if (currentPara.length <= 45 && !/[.!?]$/.test(currentPara)) {
+          paragraphs.push(currentPara);
+          currentPara = line;
+          continue;
+        }
+
+        const isNewDialogue = /^[“\"'‘—\-]/.test(line);
+        const prevEndsSentence = /[.!?][”\"'’]?$/.test(currentPara);
+        const isHyphenated = /-\s*$/.test(currentPara);
+
+        if (isHyphenated) {
+          currentPara = currentPara.replace(/-\s*$/, '') + line;
+        } else if (isNewDialogue || prevEndsSentence) {
+          paragraphs.push(currentPara);
+          currentPara = line;
+        } else {
+          currentPara += ' ' + line;
+        }
+      }
+
+      if (currentPara) {
+        paragraphs.push(currentPara);
+      }
+    }
+
+    if (paragraphs.length === 0) {
+      paragraphs = [text.trim()];
+    }
+
+    // 2. Chia trang: Làm trang dài hơn (~2400 ký tự) và TUYỆT ĐỐI KHÔNG CẮT NỬA CHỪNG ĐOẠN VĂN
+    const targetChars = Math.round(2400 * (18 / Math.max(12, settings.fontSize || 18)));
+    const pages: string[] = [];
     let currentPageParas: string[] = [];
     let currentLen = 0;
 
     for (const para of paragraphs) {
-      // Nếu đoạn văn dài hơn dung lượng 1 trang, tách theo câu để lấp đầy trang tự nhiên
-      if (para.length > targetChars) {
-        const sentences = para.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [para];
-        for (const sent of sentences) {
-          const sentTrim = sent.trim();
-          if (!sentTrim) continue;
-
-          if ((currentLen + sentTrim.length) > targetChars && currentLen >= minChars) {
-            pages.push(currentPageParas.join('\n\n').trim());
-            currentPageParas = [sentTrim];
-            currentLen = sentTrim.length;
-          } else {
-            if (currentPageParas.length > 0 && !/[.!?]$/.test(currentPageParas[currentPageParas.length - 1])) {
-              currentPageParas[currentPageParas.length - 1] += ' ' + sentTrim;
-            } else {
-              currentPageParas.push(sentTrim);
-            }
-            currentLen += sentTrim.length;
-          }
-        }
+      // Nếu đoạn văn này cho vào trang hiện tại mà bị vượt quá targetChars (và trang hiện tại đã có nội dung):
+      // Kết thúc trang hiện tại, bắt đầu trang mới với đoạn văn này (không cắt ngang đoạn)
+      if (currentPageParas.length > 0 && (currentLen + para.length) > targetChars) {
+        pages.push(currentPageParas.join('\n\n').trim());
+        currentPageParas = [para];
+        currentLen = para.length;
       } else {
-        // Đoạn văn bình thường
-        if ((currentLen + para.length) > targetChars && currentLen >= minChars) {
-          pages.push(currentPageParas.join('\n\n').trim());
-          currentPageParas = [para];
-          currentLen = para.length;
-        } else {
-          currentPageParas.push(para);
-          currentLen += para.length;
-        }
+        currentPageParas.push(para);
+        currentLen += para.length;
       }
     }
 
