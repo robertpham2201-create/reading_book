@@ -251,8 +251,8 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
       paragraphs = [text.trim()];
     }
 
-    // 2. Chia trang: Làm trang dài hơn (~2400 ký tự) và TUYỆT ĐỐI KHÔNG CẮT NỬA CHỪNG ĐOẠN VĂN
-    const targetChars = Math.round(2400 * (18 / Math.max(12, settings.fontSize || 18)));
+    // 2. Chia trang: Làm trang dài và thoáng (~3000 ký tự) và TUYỆT ĐỐI KHÔNG CẮT NỬA CHỪNG ĐOẠN VĂN
+    const targetChars = Math.round(3000 * (18 / Math.max(12, settings.fontSize || 18)));
     const pages: string[] = [];
     let currentPageParas: string[] = [];
     let currentLen = 0;
