@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getProjectRoot } from '../../../db/index.js';
 
@@ -8,14 +9,36 @@ const router = Router();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const dictDbPath = path.join(getProjectRoot(), 'db', 'dict.db');
+
+function resolveDictDbPath(): string {
+  if (process.env.DICT_DB_PATH && fs.existsSync(process.env.DICT_DB_PATH)) {
+    return process.env.DICT_DB_PATH;
+  }
+  const root = getProjectRoot();
+  const candidates = [
+    path.join(root, 'db', 'dict.db'),
+    path.join(root, 'backend', 'dict.db'),
+    path.join(root, 'dict.db'),
+    '/app/db/dict.db',
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return path.join(root, 'db', 'dict.db');
+}
+
+const dictDbPath = resolveDictDbPath();
 
 let dictDb: DatabaseSync | null = null;
 try {
-  dictDb = new DatabaseSync(dictDbPath);
-  dictDb.exec('CREATE INDEX IF NOT EXISTS idx_av_word ON av(word);');
-  dictDb.exec('CREATE INDEX IF NOT EXISTS idx_av_word_lower ON av(lower(word));');
-  console.log('[Dictionary] Đã kết nối cơ sở dữ liệu từ điển Anh - Việt (108.000+ từ)');
+  if (fs.existsSync(dictDbPath)) {
+    dictDb = new DatabaseSync(dictDbPath);
+    dictDb.exec('CREATE INDEX IF NOT EXISTS idx_av_word ON av(word);');
+    dictDb.exec('CREATE INDEX IF NOT EXISTS idx_av_word_lower ON av(lower(word));');
+    console.log('[Dictionary] Đã kết nối cơ sở dữ liệu từ điển Anh - Việt (108.000+ từ) tại:', dictDbPath);
+  } else {
+    console.warn('[Dictionary] Không tìm thấy dict.db tại:', dictDbPath);
+  }
 } catch (err) {
   console.error('[Dictionary] Lỗi kết nối dict.db:', err);
 }

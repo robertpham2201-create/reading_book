@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import db from '../../../db/index.js';
 
@@ -40,27 +41,38 @@ router.post('/register', (req: Request, res: Response) => {
       VALUES (?, 'sepia', 18, 'Bookerly', 1.6)
     `).run(userId);
 
-    // Tự động tặng 2 cuốn sách mẫu vào thư viện của user này
+    // Tự động tặng 2 cuốn sách mẫu vào thư viện của user này (lưu trực tiếp nội dung vào DB)
+    const princePath = path.join(sampleBooksDir, 'the_little_prince.txt');
+    const sherlockPath = path.join(sampleBooksDir, 'sherlock_holmes.txt');
+    const princeContent = fs.existsSync(princePath) ? fs.readFileSync(princePath, 'utf-8') : '';
+    const sherlockContent = fs.existsSync(sherlockPath) ? fs.readFileSync(sherlockPath, 'utf-8') : '';
+
     const insertBook = db.prepare(`
-      INSERT INTO books (user_id, title, author, file_path, format, current_location, progress_percent)
-      VALUES (?, ?, ?, ?, ?, '', 0)
+      INSERT INTO books (user_id, title, author, file_path, format, content, current_location, progress_percent)
+      VALUES (?, ?, ?, ?, ?, ?, '', 0)
     `);
 
-    insertBook.run(
-      userId,
-      'The Little Prince',
-      'Antoine de Saint-Exupéry',
-      path.join(sampleBooksDir, 'the_little_prince.txt'),
-      'txt'
-    );
+    if (princeContent) {
+      insertBook.run(
+        userId,
+        'The Little Prince',
+        'Antoine de Saint-Exupéry',
+        princePath,
+        'txt',
+        princeContent
+      );
+    }
 
-    insertBook.run(
-      userId,
-      'Sherlock Holmes - A Scandal in Bohemia',
-      'Arthur Conan Doyle',
-      path.join(sampleBooksDir, 'sherlock_holmes.txt'),
-      'txt'
-    );
+    if (sherlockContent) {
+      insertBook.run(
+        userId,
+        'Sherlock Holmes - A Scandal in Bohemia',
+        'Arthur Conan Doyle',
+        sherlockPath,
+        'txt',
+        sherlockContent
+      );
+    }
 
     return res.json({
       success: true,

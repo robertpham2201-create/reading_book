@@ -101,16 +101,17 @@ router.post('/upload', upload.single('bookFile'), async (req: Request, res: Resp
   try {
     const ext = path.extname(file.originalname).toLowerCase();
     const originalNameWithoutExt = path.basename(file.originalname, ext);
-    let finalFilePath = file.path;
     let format: 'epub' | 'txt' = ext === '.epub' ? 'epub' : 'txt';
     let title = req.body.title || originalNameWithoutExt;
     let author = req.body.author || 'Tác giả chưa rõ';
+    let textContent: string | null = null;
+    let fileBuffer: Buffer | null = null;
 
-    // Xử lý tự động bóc tách text nếu là file PDF
+    // 1. Xử lý file PDF: Bóc tách text và lưu vào DB, xoá file tạm
     if (ext === '.pdf') {
       try {
-        const fileBuffer = fs.readFileSync(file.path);
-        const parser = new PDFParse({ data: fileBuffer });
+        const pdfBuffer = fs.readFileSync(file.path);
+        const parser = new PDFParse({ data: pdfBuffer });
         const textResult = await parser.getText();
         const infoResult = await parser.getInfo().catch(() => null);
         await parser.destroy();
@@ -118,32 +119,19 @@ router.post('/upload', upload.single('bookFile'), async (req: Request, res: Resp
         const extractedText = textResult?.text ? textResult.text.trim() : '';
 
         if (!extractedText) {
-          // Xóa file PDF tạm
           if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
           return res.status(400).json({
             error: 'File PDF này không trích xuất được chữ (có thể là file scan hình ảnh hoàn toàn). Vui lòng chọn file PDF có văn bản để đọc.'
           });
         }
 
-        const cleanExtractedText = extractedText
+        textContent = extractedText
           .replace(/\r\n/g, '\n')
           .replace(/\n*--\s*\d+\s+of\s+\d+\s*--\n*/gi, '\n\n')
           .replace(/\n\s*-\s*\d+\s*-\s*\n/g, '\n\n')
           .replace(/\n{3,}/g, '\n\n')
           .trim();
 
-        // Lưu text đã bóc tách thành file .txt
-        const txtFileName = `${Date.now()}-${Math.round(Math.random() * 1e9)}.txt`;
-        const txtFilePath = path.join(uploadsDir, txtFileName);
-        fs.writeFileSync(txtFilePath, cleanExtractedText, 'utf-8');
-
-        // Xóa file PDF gốc ngay lập tức để tiết kiệm bộ nhớ
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-          console.log(`[Books] Đã trích xuất ${extractedText.length} ký tự từ PDF và xóa file PDF gốc: ${file.path}`);
-        }
-
-        finalFilePath = txtFilePath;
         format = 'txt';
 
         // Lấy title/author từ PDF metadata nếu có
@@ -163,14 +151,39 @@ router.post('/upload', upload.single('bookFile'), async (req: Request, res: Resp
           error: 'Lỗi bóc tách PDF: ' + (pdfErr.message || 'Không thể đọc nội dung file PDF')
         });
       }
+    } else if (ext === '.txt') {
+      // 2. Xử lý file TXT: Đọc nội dung text vào DB
+      textContent = fs.readFileSync(file.path, 'utf-8');
+      format = 'txt';
+    } else if (ext === '.epub') {
+      // 3. Xử lý file EPUB: Đọc binary buffer lưu vào BLOB trong DB
+      fileBuffer = fs.readFileSync(file.path);
+      format = 'epub';
     }
 
+    // Xoá file upload tạm thời trên đĩa cứng ngay lập tức
+    if (fs.existsSync(file.path)) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (unlinkErr) {
+        console.warn('[Books] Không thể xoá file tạm:', unlinkErr);
+      }
+    }
+
+    // Lưu trực tiếp nội dung sách vào bảng books trong SQLite
     const insertBook = db.prepare(`
-      INSERT INTO books (user_id, title, author, file_path, format, current_location, progress_percent)
-      VALUES (?, ?, ?, ?, ?, '', 0)
+      INSERT INTO books (user_id, title, author, file_path, format, content, file_data, current_location, progress_percent)
+      VALUES (?, ?, ?, '', ?, ?, ?, '', 0)
     `);
 
-    const result = insertBook.run(Number(userId), title, author, finalFilePath, format);
+    const result = insertBook.run(
+      Number(userId),
+      title,
+      author,
+      format,
+      textContent || null,
+      fileBuffer || null
+    );
 
     return res.json({
       success: true,
@@ -190,7 +203,7 @@ router.post('/upload', upload.single('bookFile'), async (req: Request, res: Resp
   }
 });
 
-// Lấy thông tin & nội dung file sách
+// Lấy thông tin & nội dung file sách (đọc trực tiếp từ SQLite)
 router.get('/:id/file', (req: Request, res: Response) => {
   const { id } = req.params;
   const userId = req.query.userId;
@@ -205,13 +218,17 @@ router.get('/:id/file', (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Bạn không có quyền truy cập cuốn sách này' });
     }
 
-    if (!fs.existsSync(book.file_path)) {
-      return res.status(404).json({ error: 'File sách không tồn tại trên hệ thống' });
-    }
-
-    // Nếu là TXT, cho phép đọc text trực tiếp hoặc stream
+    // 1. Nếu là TXT, trả về text từ DB (hoặc đọc file_path nếu là sách cũ)
     if (book.format === 'txt') {
-      const content = fs.readFileSync(book.file_path, 'utf-8');
+      let content = book.content;
+      if (!content && book.file_path && fs.existsSync(book.file_path)) {
+        content = fs.readFileSync(book.file_path, 'utf-8');
+      }
+
+      if (content === undefined || content === null) {
+        return res.status(404).json({ error: 'Nội dung sách không tồn tại' });
+      }
+
       return res.json({
         id: book.id,
         title: book.title,
@@ -223,11 +240,19 @@ router.get('/:id/file', (req: Request, res: Response) => {
       });
     }
 
-    // Nếu là EPUB, gửi file dạng binary
-    res.setHeader('Content-Type', 'application/epub+zip');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(book.title)}.epub"`);
-    const stream = fs.createReadStream(book.file_path);
-    stream.pipe(res);
+    // 2. Nếu là EPUB, gửi binary buffer từ DB (hoặc stream file_path nếu là sách cũ)
+    if (book.file_data) {
+      res.setHeader('Content-Type', 'application/epub+zip');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(book.title)}.epub"`);
+      return res.send(Buffer.from(book.file_data));
+    } else if (book.file_path && fs.existsSync(book.file_path)) {
+      res.setHeader('Content-Type', 'application/epub+zip');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(book.title)}.epub"`);
+      const stream = fs.createReadStream(book.file_path);
+      return stream.pipe(res);
+    } else {
+      return res.status(404).json({ error: 'File sách EPUB không tồn tại trên hệ thống' });
+    }
   } catch (error: any) {
     console.error('[Books] Lỗi đọc file sách:', error);
     return res.status(500).json({ error: 'Không thể đọc file sách' });

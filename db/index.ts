@@ -67,8 +67,10 @@ CREATE TABLE IF NOT EXISTS books (
     user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     author TEXT DEFAULT 'Unknown',
-    file_path TEXT NOT NULL,
+    file_path TEXT DEFAULT '',
     format TEXT NOT NULL CHECK(format IN ('epub', 'txt')),
+    content TEXT,
+    file_data BLOB,
     current_location TEXT DEFAULT '',
     progress_percent REAL DEFAULT 0,
     last_read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -127,6 +129,10 @@ try {
     db.exec(DEFAULT_SCHEMA_SQL);
   }
 
+  // Tự động migrate thêm cột content và file_data cho cơ sở dữ liệu cũ
+  try { db.exec('ALTER TABLE books ADD COLUMN content TEXT;'); } catch (_) {}
+  try { db.exec('ALTER TABLE books ADD COLUMN file_data BLOB;'); } catch (_) {}
+
   // Tự động khởi tạo tài khoản admin mặc định nếu chưa tồn tại
   const adminUser = db.prepare('SELECT id FROM users WHERE username = ?').get('admin') as { id: number } | undefined;
   if (!adminUser) {
@@ -142,16 +148,19 @@ try {
     const princePath = path.join(sampleBooksDir, 'the_little_prince.txt');
     const sherlockPath = path.join(sampleBooksDir, 'sherlock_holmes.txt');
 
+    const princeContent = fs.existsSync(princePath) ? fs.readFileSync(princePath, 'utf-8') : '';
+    const sherlockContent = fs.existsSync(sherlockPath) ? fs.readFileSync(sherlockPath, 'utf-8') : '';
+
     const insertBook = db.prepare(`
-      INSERT INTO books (user_id, title, author, file_path, format, current_location, progress_percent)
-      VALUES (?, ?, ?, ?, ?, '', 0)
+      INSERT INTO books (user_id, title, author, file_path, format, content, current_location, progress_percent)
+      VALUES (?, ?, ?, ?, ?, ?, '', 0)
     `);
 
-    if (fs.existsSync(princePath)) {
-      insertBook.run(adminId, 'The Little Prince', 'Antoine de Saint-Exupéry', princePath, 'txt');
+    if (princeContent) {
+      insertBook.run(adminId, 'The Little Prince', 'Antoine de Saint-Exupéry', princePath, 'txt', princeContent);
     }
-    if (fs.existsSync(sherlockPath)) {
-      insertBook.run(adminId, 'Sherlock Holmes - A Scandal in Bohemia', 'Arthur Conan Doyle', sherlockPath, 'txt');
+    if (sherlockContent) {
+      insertBook.run(adminId, 'Sherlock Holmes - A Scandal in Bohemia', 'Arthur Conan Doyle', sherlockPath, 'txt', sherlockContent);
     }
     console.log('[DB] Đã tự động tạo tài khoản mặc định: admin / 123');
   }
