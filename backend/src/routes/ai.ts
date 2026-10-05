@@ -141,22 +141,22 @@ router.post('/explain', async (req: Request, res: Response) => {
     });
   }
 
-  // Prompt ngắn gọn, súc tích, đi thẳng vào trọng tâm để AI tạo câu trả lời nhanh nhất (tiết kiệm token)
-  const systemPrompt = `Bạn là trợ lý giải nghĩa tiếng Anh theo ngữ cảnh. Trả lời cực kỳ ngắn gọn, súc tích (dưới 70 từ).
-Chỉ trả về DUY NHẤT một chuỎi JSON hợp lệ (không kèm văn bản nào khác ngoài JSON):
+  // Prompt ngắn gọn, súc tích, đi thẳng vào trọng tâm
+  const systemPrompt = `Bạn là trợ lý dịch và phân tích ngữ cảnh tiếng Anh sang tiếng Việt.
+Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau (không kèm markdown hay chữ nào bên ngoài):
 {
-  "translation": "Bản dịch tự nhiên, chuẩn thoát ý theo ngữ cảnh",
-  "why": "1-2 câu ngắn giải thích sắc thái hoặc lý do dịch như vậy",
+  "translation": "Bản dịch tiếng Việt tự nhiên, thoát ý chuẩn theo ngữ cảnh",
+  "why": "Giải thích ngắn gọn sắc thái hoặc lý do dịch như vậy",
   "grammarAndIdioms": [
     {
-      "element": "cụm từ / thành ngữ nổi bật (nếu có)",
-      "explanation": "nghĩa ngắn gọn"
+      "element": "từ vựng / cụm từ / thành ngữ nổi bật",
+      "explanation": "nghĩa ngắn gọn và cách dùng"
     }
   ]
 }`;
 
-  const userPrompt = `Đoạn văn: "${paragraphContext}"
-Câu/cụm cần giải thích: "${cleanSelected}"`;
+  const userPrompt = `Đoạn văn ngữ cảnh: "${paragraphContext}"
+Câu/cụm từ cần giải thích: "${cleanSelected}"`;
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -171,8 +171,8 @@ Câu/cụm cần giải thích: "${cleanSelected}"`;
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.1,
-        max_tokens: 220,
+        temperature: 0.2,
+        max_tokens: 800,
       }),
       signal: AbortSignal.timeout(30000),
     });
@@ -185,19 +185,48 @@ Câu/cụm cần giải thích: "${cleanSelected}"`;
     }
 
     const resultData: any = await response.json();
-    const rawContent = resultData.choices?.[0]?.message?.content || '';
+    const rawContent = (resultData.choices?.[0]?.message?.content || '').trim();
 
-    let parsedResult;
+    let parsedResult: any = null;
+
+    // 1. Thử parse trực tiếp JSON sau khi bóc tách code block
     try {
-      const cleanJson = rawContent.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+      const cleanJson = rawContent
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
       parsedResult = JSON.parse(cleanJson);
-    } catch {
-      parsedResult = {
-        translation: rawContent,
-        why: 'Đã phân tích nội dung dựa trên ngữ cảnh câu văn.',
-        grammarAndIdioms: [],
-        usageTip: '',
-      };
+    } catch (_) {
+      // 2. Fallback trích xuất bằng regex nếu JSON bị cắt cụt hoặc thừa ký tự
+      const transMatch = rawContent.match(/"translation"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i);
+      const whyMatch = rawContent.match(/"why"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i);
+
+      const grammarItems: Array<{ element: string; explanation: string }> = [];
+      const itemRegex = /"element"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*,\s*"explanation"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+      let m;
+      while ((m = itemRegex.exec(rawContent)) !== null) {
+        grammarItems.push({
+          element: m[1].replace(/\\"/g, '"'),
+          explanation: m[2].replace(/\\"/g, '"'),
+        });
+      }
+
+      if (transMatch) {
+        parsedResult = {
+          translation: transMatch[1].replace(/\\"/g, '"'),
+          why: whyMatch ? whyMatch[1].replace(/\\"/g, '"') : 'Đã phân tích dựa trên ngữ cảnh đoạn văn.',
+          grammarAndIdioms: grammarItems,
+        };
+      } else {
+        // Nếu không có cả JSON, làm sạch chuỗi thô để hiển thị làm bản dịch
+        const sanitized = rawContent.replace(/[{}[\]"]/g, ' ').replace(/\s+/g, ' ').trim();
+        parsedResult = {
+          translation: sanitized || cleanSelected,
+          why: 'Đã phân tích dựa trên ngữ cảnh câu văn.',
+          grammarAndIdioms: [],
+        };
+      }
     }
 
     return res.json({

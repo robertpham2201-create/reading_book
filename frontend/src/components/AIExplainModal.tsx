@@ -65,7 +65,24 @@ export const AIExplainModal: React.FC<AIExplainModalProps> = ({
         context: context || selectedText,
         bookTitle,
       });
-      setData(res);
+
+      // Kiểm tra và giải mã nếu translation vô tình bị chứa raw JSON
+      let cleanData = { ...res };
+      if (typeof cleanData.translation === 'string' && cleanData.translation.trim().startsWith('{')) {
+        try {
+          const raw = cleanData.translation.trim();
+          const transMatch = raw.match(/"translation"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i);
+          const whyMatch = raw.match(/"why"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i);
+          if (transMatch) {
+            cleanData.translation = transMatch[1].replace(/\\"/g, '"');
+          }
+          if (whyMatch && (!cleanData.why || cleanData.why.includes('ngữ cảnh'))) {
+            cleanData.why = whyMatch[1].replace(/\\"/g, '"');
+          }
+        } catch (_) {}
+      }
+
+      setData(cleanData);
     } catch (err: any) {
       setError(err.message || 'Không thể kết nối tới AI');
     } finally {
