@@ -41,6 +41,35 @@ try {
     const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
     db.exec(schemaSql);
   }
+
+  // Tự động khởi tạo tài khoản admin mặc định nếu chưa tồn tại
+  const adminUser = db.prepare('SELECT id FROM users WHERE username = ?').get('admin') as { id: number } | undefined;
+  if (!adminUser) {
+    const res = db.prepare('INSERT INTO users (username, password, api_key) VALUES (?, ?, ?)').run('admin', '123', '');
+    const adminId = Number(res.lastInsertRowid);
+
+    db.prepare(`
+      INSERT OR IGNORE INTO user_settings (user_id, theme, font_size, font_family, line_height)
+      VALUES (?, 'sepia', 18, 'Bookerly', 1.6)
+    `).run(adminId);
+
+    const sampleBooksDir = path.join(rootDir, 'backend', 'sample_books');
+    const princePath = path.join(sampleBooksDir, 'the_little_prince.txt');
+    const sherlockPath = path.join(sampleBooksDir, 'sherlock_holmes.txt');
+
+    const insertBook = db.prepare(`
+      INSERT INTO books (user_id, title, author, file_path, format, current_location, progress_percent)
+      VALUES (?, ?, ?, ?, ?, '', 0)
+    `);
+
+    if (fs.existsSync(princePath)) {
+      insertBook.run(adminId, 'The Little Prince', 'Antoine de Saint-Exupéry', princePath, 'txt');
+    }
+    if (fs.existsSync(sherlockPath)) {
+      insertBook.run(adminId, 'Sherlock Holmes - A Scandal in Bohemia', 'Arthur Conan Doyle', sherlockPath, 'txt');
+    }
+    console.log('[DB] Đã tự động tạo tài khoản mặc định: admin / 123');
+  }
 } catch (error) {
   console.error('[DB] Khởi tạo database thất bại:', error);
 }
