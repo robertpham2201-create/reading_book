@@ -239,4 +239,133 @@ Câu/cụm từ cần giải thích: "${cleanSelected}"`;
   }
 });
 
+// Cache âm thanh TTS trong bộ nhớ (giúp phát âm tức thì < 5ms cho các từ/cụm từ lặp lại)
+const ttsCache = new Map<string, Buffer>();
+const MAX_TTS_CACHE = 400;
+
+function getCachedAudio(key: string): Buffer | undefined {
+  return ttsCache.get(key);
+}
+
+function setCachedAudio(key: string, buffer: Buffer): void {
+  if (ttsCache.size >= MAX_TTS_CACHE) {
+    const firstKey = ttsCache.keys().next().value;
+    if (firstKey) ttsCache.delete(firstKey);
+  }
+  ttsCache.set(key, buffer);
+}
+
+// Xử lý tạo âm thanh TTS với model mimo-v2.5-tts
+async function handleMiMoTts(
+  text: string,
+  voice = 'Chloe',
+  style?: string
+): Promise<{ buffer: Buffer; format: string }> {
+  const cleanText = text.trim();
+  if (!cleanText) {
+    throw new Error('Vui lòng cung cấp văn bản cần đọc');
+  }
+
+  const selectedVoice = voice || 'Chloe';
+  const cacheKey = `${selectedVoice}:${cleanText.toLowerCase()}`;
+  const cached = getCachedAudio(cacheKey);
+  if (cached) {
+    return { buffer: cached, format: 'mp3' };
+  }
+
+  const apiKey = process.env.xiaomi_api || process.env.GEMINI_API_KEY;
+  const baseUrl = process.env.xiaomi_url || 'https://token-plan-sgp.xiaomimimo.com/v1';
+  const ttsModel = process.env.xiaomi_tts_model || 'mimo-v2.5-tts';
+
+  if (!apiKey) {
+    throw new Error('Chưa cấu hình API Key trong file .env');
+  }
+
+  // Cấu trúc API Xiaomi MiMo TTS theo chuẩn OpenAI chat/completions kèm audio config
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: ttsModel,
+      messages: [
+        {
+          role: 'user',
+          content:
+            style ||
+            'Speak clearly in a natural, pleasant, and expressive English tone suitable for book reading and pronunciation learning.',
+        },
+        {
+          role: 'assistant',
+          content: cleanText,
+        },
+      ],
+      audio: {
+        format: 'mp3',
+        voice: selectedVoice,
+      },
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Lỗi kết nối Xiaomi TTS (${response.status}): ${errText || response.statusText}`);
+  }
+
+  const resultData: any = await response.json();
+  const audioBase64 = resultData.choices?.[0]?.message?.audio?.data;
+  if (!audioBase64) {
+    throw new Error('Không nhận được dữ liệu âm thanh từ Xiaomi MiMo TTS');
+  }
+
+  const audioBuffer = Buffer.from(audioBase64, 'base64');
+  setCachedAudio(cacheKey, audioBuffer);
+
+  return { buffer: audioBuffer, format: 'mp3' };
+}
+
+// GET /api/ai/tts?text=hello&voice=Chloe
+router.get('/tts', async (req: Request, res: Response) => {
+  try {
+    const text = String(req.query.text || '').trim();
+    const voice = String(req.query.voice || 'Chloe').trim();
+
+    if (!text) {
+      return res.status(400).json({ error: 'Thiếu tham số text' });
+    }
+
+    const { buffer, format } = await handleMiMoTts(text, voice);
+    res.setHeader('Content-Type', format === 'mp3' ? 'audio/mpeg' : 'audio/wav');
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.end(buffer);
+  } catch (error: any) {
+    console.error('[TTS GET] Lỗi:', error);
+    return res.status(500).json({ error: error.message || 'Lỗi tạo giọng đọc TTS' });
+  }
+});
+
+// POST /api/ai/tts { text, voice, style }
+router.post('/tts', async (req: Request, res: Response) => {
+  try {
+    const { text, voice, style } = req.body;
+    if (!text || !String(text).trim()) {
+      return res.status(400).json({ error: 'Thiếu nội dung text' });
+    }
+
+    const { buffer, format } = await handleMiMoTts(String(text), voice, style);
+    res.setHeader('Content-Type', format === 'mp3' ? 'audio/mpeg' : 'audio/wav');
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.end(buffer);
+  } catch (error: any) {
+    console.error('[TTS POST] Lỗi:', error);
+    return res.status(500).json({ error: error.message || 'Lỗi tạo giọng đọc TTS' });
+  }
+});
+
 export default router;
+
