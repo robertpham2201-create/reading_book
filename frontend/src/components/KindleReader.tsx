@@ -66,6 +66,8 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hasMovedRef = useRef<boolean>(false);
   const rawBookTextRef = useRef<string>('');
+  const touchStartYRef = useRef<number | null>(null);
+  const touchStartXRef = useRef<number | null>(null);
 
   // Theme styling mapping
   const themeClasses = {
@@ -452,6 +454,60 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
     }
   };
 
+  // Xử lý vuốt lên/xuống >= 300px để chuyển trang
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartYRef.current = e.touches[0].clientY;
+      touchStartXRef.current = e.touches[0].clientX;
+      hasMovedRef.current = false;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartYRef.current !== null && touchStartXRef.current !== null && e.touches.length === 1) {
+      const moveY = Math.abs(e.touches[0].clientY - touchStartYRef.current);
+      const moveX = Math.abs(e.touches[0].clientX - touchStartXRef.current);
+      if (moveY > 8 || moveX > 8) {
+        hasMovedRef.current = true;
+      }
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartYRef.current === null || touchStartXRef.current === null) return;
+    if (e.changedTouches.length === 0) return;
+
+    const touchEndY = e.changedTouches[0].clientY;
+    const touchEndX = e.changedTouches[0].clientX;
+    const deltaY = touchEndY - touchStartYRef.current;
+    const deltaX = touchEndX - touchStartXRef.current;
+    const absY = Math.abs(deltaY);
+    const absX = Math.abs(deltaX);
+
+    touchStartYRef.current = null;
+    touchStartXRef.current = null;
+
+    setTimeout(() => {
+      hasMovedRef.current = false;
+    }, 150);
+
+    // Yêu cầu vuốt dài ít nhất 300px theo chiều dọc
+    if (absY >= 300 && absY > absX * 1.5) {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+        return;
+      }
+
+      if (deltaY <= -300) {
+        // Vuốt lên >= 300px: Sang trang sau
+        nextPage();
+      } else if (deltaY >= 300) {
+        // Vuốt xuống >= 300px: Sang trang trước
+        prevPage();
+      }
+    }
+  };
+
   const toggleAutoScroll = () => {
     setIsAutoScrolling((prev) => {
       const next = !prev;
@@ -698,6 +754,9 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
         ref={scrollContainerRef}
         className="flex-1 w-full max-w-2xl mx-auto px-5 sm:px-8 py-5 sm:py-8 overflow-y-auto flex flex-col justify-between"
         onClick={handleScreenClick}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
@@ -737,7 +796,7 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
           </div>
         )}
 
-        {/* Nút điều hướng cuối trang: Chỉ 2 nút sang trang và trang trước */}
+        {/* Nút điều hướng cuối trang: 2 nút sang trang và số trang */}
         <div className="pt-8 pb-4 flex items-center justify-between gap-3 select-none pointer-events-auto">
           <button
             type="button"
@@ -751,6 +810,10 @@ export const KindleReader: React.FC<KindleReaderProps> = ({
             <ChevronLeft className="w-4 h-4" />
             <span>Trang trước</span>
           </button>
+
+          <span className="font-mono text-xs sm:text-sm font-semibold opacity-70 tracking-wider">
+            Trang {currentPage + 1} / {totalPages}
+          </span>
 
           <button
             type="button"
