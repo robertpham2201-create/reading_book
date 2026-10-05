@@ -35,8 +35,11 @@ COPY --from=builder /app/backend/server.js ./backend/server.js
 COPY --from=builder /app/frontend/dist ./frontend/dist
 COPY --from=builder /app/db ./db
 
-# Ensure uploads directory exists
-RUN mkdir -p /app/backend/uploads
+# Ensure uploads, db, and data directories exist
+RUN mkdir -p /app/backend/uploads /app/db /app/data
+
+# Khai báo Volume cho dữ liệu bền vững (SQLite DB & Sách upload)
+VOLUME ["/app/db", "/app/backend/uploads", "/app/data"]
 
 EXPOSE 3001
 

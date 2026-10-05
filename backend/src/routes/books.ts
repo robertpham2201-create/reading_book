@@ -4,13 +4,13 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PDFParse } from 'pdf-parse';
-import db, { getProjectRoot } from '../../../db/index.js';
+import db, { getProjectRoot, getUploadsDir } from '../../../db/index.js';
 
 const router = Router();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const uploadsDir = path.join(getProjectRoot(), 'backend', 'uploads');
+const uploadsDir = getUploadsDir();
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
